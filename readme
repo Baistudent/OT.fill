@@ -1,0 +1,5 @@
+1. 创建build, 使用cmake编译并生成cpp.code的代码(release), 得到OT.exe
+
+2. 运行bin/demo.bat,可以得到中间过程文件和结果文件
+
+3. .m文件可以使用pickerviewer打开, .obj文件可以使用meshlab打开查看
