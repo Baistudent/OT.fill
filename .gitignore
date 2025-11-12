@@ -1,4 +1,7 @@
 .vscode/
+
 build/
 cpp.code/build/
+
 data/*/
+data/pot.7z
