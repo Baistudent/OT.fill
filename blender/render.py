@@ -234,6 +234,9 @@ def main():
         psnr_line = f"{frame:03d},{psnr_value:.4f}"
         psnr_report_lines.append(psnr_line)
 
+
+
+
     # 将 PSNR 结果写入输出目录内的文本文件
     report_path = os.path.join(output_dir, "psnr_results.txt")
     with open(report_path, "w", encoding="utf-8") as report_file:
