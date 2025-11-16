@@ -383,7 +383,7 @@ def get_edge_intersections(v_line, uv_tri):
     return sorted(intersections)
 
 
-def apply_texture_mapping_scanline(m_file, source_image_path, output_image_path):
+def apply_texture_mapping_scanline(m_file, source_image_path, output_image_path, pixel=None):
     """
     主函数：基于均匀网格的逆向映射（UV -> XY -> 采样）
     
@@ -400,9 +400,14 @@ def apply_texture_mapping_scanline(m_file, source_image_path, output_image_path)
     src_width, src_height = source_img.size
     src_pixels = np.array(source_img.convert('RGB'), dtype=np.uint8)
     
-    # 目标 UV 图片尺寸：默认使用源图分辨率
-    out_width = src_width
-    out_height = src_height
+    # 目标 UV 图片尺寸：默认使用源图分辨率，允许通过 pixel 参数覆盖
+    if pixel is not None:
+        out_width = out_height = int(pixel)
+        if out_width <= 0:
+            raise ValueError("pixel 参数必须为正整数")
+    else:
+        out_width = src_width
+        out_height = src_height
     
     # 计算 XY 坐标范围（用于归一化到 [0, 1]）
     x_coords = np.array([v[0] for v in vertices])
@@ -544,13 +549,23 @@ if __name__ == "__main__":
     import sys
     
     if len(sys.argv) < 3:
-        print("使用方法: python texture_mapping.py <m_file> <source_image> [output_image]")
+        print("使用方法: python texture_mapping.py <m_file> <source_image> [output_image] [pixel]")
         print("示例:")
-        print("  python texture_mapping.py Elephant/texture_mesh_256.m Elephant/texture.png Elephant/output.png")
+        print("  python texture_mapping.py Elephant/texture_mesh_256.m Elephant/texture.png Elephant/output.png 1024")
         sys.exit(1)
     
     m_file = sys.argv[1]
     source_image = sys.argv[2]
     output_image = sys.argv[3] if len(sys.argv) > 3 else m_file.replace('.m', '_mapped.png')
+    pixel_size = None
+    if len(sys.argv) > 4:
+        try:
+            pixel_size = int(sys.argv[4])
+        except ValueError:
+            print("像素尺寸必须为整数，例如 1024")
+            sys.exit(1)
+        if pixel_size <= 0:
+            print("像素尺寸必须为正数")
+            sys.exit(1)
     
-    apply_texture_mapping_scanline(m_file, source_image, output_image)
+    apply_texture_mapping_scanline(m_file, source_image, output_image, pixel=pixel_size)

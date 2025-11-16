@@ -1,0 +1,12 @@
+1. 安装miniconda, 创建虚拟环境{youCondaEnv}(自己命名), 并安装依赖包
+    conda create -n {youCondaEnv} python=3.8
+    conda activate {youCondaEnv}
+    conda install pillow numpy
+
+2. 修改 OTFill.bat的 {BLENDER_DIR} 参数(line 20处), 替换为自己的 "blender.exe"路径
+   修改 OTFill.bat的 {condaEnv} 参数(line 19处), 替换为 {youCondaEnv}
+
+3. 运行 "gsoProcess.bat {rootDir}", {rootDir}是你存储GSO数据集的根目录
+    例如: "gsoProcess.bat E:\OT.fill\data\GSO_dataset"
+
+4. 处理完成后, 将 {rootDir} 打包到硬盘中即可

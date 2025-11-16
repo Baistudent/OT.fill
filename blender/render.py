@@ -1,28 +1,20 @@
+import argparse
 import os
+import sys
+from math import pi, log10, sqrt
 
 import bpy
 from mathutils import Vector
-from math import pi, log10
 
-# 模板脚本：将两个带有 MTL 材质的 OBJ 模型导入场景并渲染单帧图像
-# 使用时请在下方的常量配置区填写实际文件路径与渲染参数
-
-OBJ_A_PATH = r"E:\OT.fill\data\pot\pot.obj"  # 第一个 OBJ 文件路径（需配套 MTL、纹理）
-OBJ_B_PATH = r"E:\OT.fill\data\pot\2048_0.10\pot_2048_0.10.obj"  # 第二个 OBJ 文件路径（需配套 MTL、纹理）
-OUTPUT_PATH = r"E:\OT.fill\data\pot\2048_0.10\render"  # 渲染输出图像路径（PNG）
-
-CAMERA_LOCATION = (100.0, 100.0, 55.0)  # 摄像机在世界坐标中的位置
-CAMERA_TARGET = (0.0, 0.0, 0.0)  # 摄像机对准的目标点坐标
-
-LIGHT_LOCATION = (100.0, 100.0, 100.0)  # 太阳光位置（主要用于确定光照方向）
-LIGHT_TARGET = (0.0, 0.0, 0.0)  # 太阳光照射的目标点
-LIGHT_ENERGY = 3.0  # 太阳光能量系数（可调节整体亮度）
-
-IMAGE_WIDTH = 2048  # 输出图像的宽度（像素）
-IMAGE_HEIGHT = 2048  # 输出图像的高度（像素）
-IMAGE_PERCENT = 100  # 分辨率缩放百分比（100 表示满分辨率）
-
-RENDER_FRAMES = [0, 60, 120, 180, 240, 300, 360]  # 需要输出的关键帧列表
+# 常量参数集中管理
+IMAGE_WIDTH = 2048
+IMAGE_HEIGHT = 2048
+IMAGE_PERCENT = 100
+LIGHT_ENERGY = 3.0
+LIGHT_OFFSET_FACTORS = (0.5, 0.5, 0.5)
+CAMERA_HEIGHT_SCALE = 0.6 * sqrt(2)
+CAMERA_ORTHO_MARGIN = 1.05
+GPU_DEVICE_PRIORITY = ("OPTIX", "CUDA", "HIP", "ONEAPI", "METAL", "OPENCL")
 
 
 def clear_scene():
@@ -57,27 +49,6 @@ def place_objects_at_origin(objects):
             obj.location = (0.0, 0.0, 0.0)
 
 
-def add_root_empty():
-    """创建一个原点处的空对象，作为两个模型的父级。"""
-    bpy.ops.object.select_all(action="DESELECT")
-    bpy.ops.object.empty_add(
-        type='PLAIN_AXES',
-        radius=1.0,
-        align='WORLD',
-        location=(0.0, 0.0, 0.0),
-        scale=(1.0, 1.0, 1.0),
-    )
-    empty = bpy.context.object
-    empty.name = "ModelsRoot"
-    return empty
-
-
-def parent_objects(parent_obj, children):
-    """将导入的对象绑定到指定的空对象上。"""
-    for child in children:
-        child.parent = parent_obj
-
-
 def set_objects_visibility(objects, hidden):
     """批量设置对象的渲染与视图可见性。"""
     for obj in objects:
@@ -85,72 +56,117 @@ def set_objects_visibility(objects, hidden):
         obj.hide_viewport = hidden
 
 
-def animate_root_rotation(root_obj):
-    """为空物体设置 Z 轴旋转动画，从 0 到 360 度。"""
-    scene = bpy.context.scene
-    scene.frame_set(0)
-    root_obj.rotation_euler = (0.0, 0.0, 0.0)
-    root_obj.keyframe_insert(data_path="rotation_euler", index=-1)
+def compute_scene_bounds(objects):
+    """计算多个对象的联合包围盒中心与尺寸。"""
+    min_corner = Vector((float("inf"), float("inf"), float("inf")))
+    max_corner = Vector((float("-inf"), float("-inf"), float("-inf")))
 
-    scene.frame_set(360)
-    root_obj.rotation_euler = (0.0, 0.0, 2 * pi)
-    root_obj.keyframe_insert(data_path="rotation_euler", index=-1)
+    for obj in objects:
+        for corner in obj.bound_box:
+            world_corner = obj.matrix_world @ Vector(corner)
+            min_corner = Vector((min(min_corner.x, world_corner.x),
+                                 min(min_corner.y, world_corner.y),
+                                 min(min_corner.z, world_corner.z)))
+            max_corner = Vector((max(max_corner.x, world_corner.x),
+                                 max(max_corner.y, world_corner.y),
+                                 max(max_corner.z, world_corner.z)))
 
-    scene.frame_start = 0
-    scene.frame_end = 360
+    size = max_corner - min_corner
+    size.x = max(size.x, 1e-3)
+    size.y = max(size.y, 1e-3)
+    size.z = max(size.z, 1e-3)
+    center = (min_corner + max_corner) * 0.5
+    return center, size
 
 
-def add_camera(location, target):
-    """在指定位置创建摄像机并指向目标点。"""
-    bpy.ops.object.camera_add(location=location)
+def configure_camera(center, size_vec):
+    """根据包围盒尺寸自适应设置相机位置与正交比例。"""
+    size_x = max(size_vec.x, 1e-3)
+    size_y = max(size_vec.y, 1e-3)
+    size_z = max(size_vec.z, 1e-3)
+    max_dim = max(size_x, size_y, size_z)
+    ortho_scale = max(size_x, size_y) * CAMERA_ORTHO_MARGIN * 1.2
+
+    cam_x = center.x + max_dim
+    cam_y = center.y + max_dim
+    cam_z = center.z + CAMERA_HEIGHT_SCALE * max_dim
+
+    bpy.ops.object.camera_add(location=(cam_x, cam_y, cam_z))
     camera = bpy.context.object
     camera.name = "RenderCamera"
-
     camera.data.type = "ORTHO"
-    camera.data.ortho_scale = 320
-    camera.rotation_euler[0] = 70 / 180 * pi
-    camera.rotation_euler[1] = 0 / 180 * pi
-    camera.rotation_euler[2] = 135 / 180 * pi
+    camera.data.ortho_scale = ortho_scale
+    direction = Vector((0.0, 0.0, 0.0)) - camera.location
+    camera.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
     bpy.context.scene.camera = camera
 
 
-def add_key_light(location, target, energy):
-    """创建太阳光并指向原点，模拟日光照明。"""
+def configure_light(center, size):
+    """创建太阳光并根据包围盒尺寸放置。"""
+    light_x = center.x + LIGHT_OFFSET_FACTORS[0] * size.x
+    light_y = center.y + LIGHT_OFFSET_FACTORS[1] * size.y
+    light_z = center.z + LIGHT_OFFSET_FACTORS[2] * size.z
+
     bpy.ops.object.select_all(action="DESELECT")
-    bpy.ops.object.light_add(type="SUN", align="WORLD", location=location)
+    bpy.ops.object.light_add(type="SUN", align="WORLD", location=(light_x, light_y, light_z))
     light = bpy.context.object
     light.name = "KeyLight"
-    light.data.energy = energy
-    # 将太阳光的方向对准目标点，确保照射原点
-    direction = Vector(target) - light.location
+    light.data.energy = LIGHT_ENERGY
+    direction = Vector((0.0, 0.0, 0.0)) - light.location
     light.rotation_euler = direction.to_track_quat("-Z", "Y").to_euler()
-    light.data.angle = 0.5  # 太阳光角度，数值越小阴影越锐利
+    light.data.angle = 0.5
+
+def enable_cycles_gpu():
+    """尝试启用 GPU 设备；若失败则回落到 CPU。"""
+    prefs = bpy.context.preferences.addons["cycles"].preferences
+    get_devices = getattr(prefs, "get_devices", None)
+    refresh_devices = getattr(prefs, "refresh_devices", None)
+    if callable(get_devices):
+        get_devices()
+    elif callable(refresh_devices):
+        refresh_devices()
+
+    requested = os.environ.get("BLENDER_CYCLES_DEVICE", "").upper()
+    priority = []
+    if requested:
+        priority.append(requested)
+    priority.extend(dtype for dtype in GPU_DEVICE_PRIORITY if dtype != requested)
+
+    for dtype in priority:
+        try:
+            prefs.compute_device_type = dtype
+        except Exception:
+            continue
+
+        gpu_found = False
+        for device in prefs.devices:
+            is_gpu = device.type != "CPU"
+            device.use = is_gpu
+            gpu_found = gpu_found or is_gpu
+
+        if gpu_found:
+            return dtype
+
+    prefs.compute_device_type = "NONE"
+    for device in prefs.devices:
+        device.use = device.type == "CPU"
+    return "CPU"
 
 
 def configure_render(output_path: str):
-    """切换到 Cycles 渲染器并设置输出路径与格式。"""
+    """切换到 Cycles 渲染器、启用 GPU 并设置输出路径。"""
     scene = bpy.context.scene
-    scene.render.engine = "CYCLES"
-    scene.cycles.device = 'GPU'
+    # scene.render.engine = "CYCLES"
+    scene.render.engine = "BLENDER_EEVEE_NEXT"
+    device_kind = enable_cycles_gpu()
+    scene.cycles.device = 'GPU' if device_kind != "CPU" else 'CPU'
+    scene.render.film_transparent = False
     scene.render.image_settings.file_format = "PNG"
+    scene.render.image_settings.color_mode = "RGBA"
     scene.render.filepath = os.path.abspath(output_path)
     scene.render.resolution_x = IMAGE_WIDTH
     scene.render.resolution_y = IMAGE_HEIGHT
     scene.render.resolution_percentage = IMAGE_PERCENT
-
-
-def resolve_output_dir(path: str) -> str:
-    """根据用户提供的路径推断渲染输出目录。"""
-    if not path:
-        return os.getcwd()
-
-    absolute = os.path.abspath(path)
-    if os.path.isdir(absolute):
-        return absolute
-
-    directory = os.path.dirname(absolute)
-    return directory if directory else os.getcwd()
-
 
 def compute_psnr(image_path_a: str, image_path_b: str) -> float:
     """对两张图像计算 PSNR 值并返回结果。"""
@@ -184,64 +200,56 @@ def compute_psnr(image_path_a: str, image_path_b: str) -> float:
         bpy.data.images.remove(img_b)
 
 
+def render_single_view(scene, visible_group, hidden_group, filepath):
+    """切换可见性并渲染单张图片。"""
+    set_objects_visibility(visible_group, False)
+    set_objects_visibility(hidden_group, True)
+    scene.render.filepath = filepath
+    bpy.ops.render.render(write_still=True)
+
+
+def parse_args():
+    """只解析 -- 之后传入脚本的 OBJ 参数，兼容直接 python 运行。"""
+    if "--" in sys.argv:
+        script_args = sys.argv[sys.argv.index("--") + 1:]
+    else:
+        script_args = sys.argv[1:]
+
+    parser = argparse.ArgumentParser(description="Render two OBJ files with a shared camera setup.")
+    parser.add_argument("obj_a", help="Path to the first OBJ file.")
+    parser.add_argument("obj_b", help="Path to the second OBJ file.")
+    return parser.parse_args(script_args)
+
+
 def main():
-    """执行完整的场景构建、渲染配置与输出流程。"""
-    # 1. 清空场景，避免残留对象影响渲染
-    clear_scene()
-    # 1.5 创建空物体，后续模型绑定到该父对象
-    root_empty = add_root_empty()
-    # 2. 导入两个 OBJ 模型（需保证相应 MTL 文件与纹理存在）
-    imported_a = import_obj(OBJ_A_PATH)
-    imported_b = import_obj(OBJ_B_PATH)
-    parent_objects(root_empty, imported_a + imported_b)
-    animate_root_rotation(root_empty)
-    # 3. 布置摄像机与主光源，基础参数可按需在顶部常量区调整
-    add_camera(CAMERA_LOCATION, CAMERA_TARGET)
-    add_key_light(LIGHT_LOCATION, LIGHT_TARGET, LIGHT_ENERGY)
-    # 4. 配置 Cycles 渲染器并指定输出文件
-    output_dir = resolve_output_dir(OUTPUT_PATH)
+    args = parse_args()
+    output_dir = os.path.dirname(os.path.abspath(args.obj_a)) or os.getcwd()
     os.makedirs(output_dir, exist_ok=True)
+
+    scene = bpy.context.scene
+    clear_scene()
+    imported_a = import_obj(args.obj_a)
+    imported_b = import_obj(args.obj_b)
+
+    center, size = compute_scene_bounds(imported_a + imported_b)
+    configure_camera(center, size)
+    configure_light(center, size)
     configure_render(output_dir)
 
-    # 5. 针对每个关键帧分别渲染两张图并计算 PSNR
-    obj_a_name = os.path.splitext(os.path.basename(OBJ_A_PATH))[0]
-    obj_b_name = os.path.splitext(os.path.basename(OBJ_B_PATH))[0]
-    scene = bpy.context.scene
-    psnr_report_lines = []
+    name_a = os.path.splitext(os.path.basename(args.obj_a))[0]
+    name_b = os.path.splitext(os.path.basename(args.obj_b))[0]
+    output_a = os.path.join(output_dir, f"render_{name_a}.png")
+    output_b = os.path.join(output_dir, f"render_{name_b}.png")
 
-    for frame in RENDER_FRAMES:
-        scene.frame_set(frame)
+    render_single_view(scene, imported_a, imported_b, output_a)
+    render_single_view(scene, imported_b, imported_a, output_b)
 
-        # 渲染仅包含 OBJ A 的图像
-        set_objects_visibility(imported_a, False)
-        set_objects_visibility(imported_b, True)
-        output_a = os.path.join(output_dir, f"{obj_a_name}_{frame:03d}.png")
-        scene.render.filepath = output_a
-        bpy.ops.render.render(write_still=True)
+    set_objects_visibility(imported_a, False)
+    set_objects_visibility(imported_b, False)
 
-        # 渲染仅包含 OBJ B 的图像
-        set_objects_visibility(imported_a, True)
-        set_objects_visibility(imported_b, False)
-        output_b = os.path.join(output_dir, f"{obj_b_name}_{frame:03d}.png")
-        scene.render.filepath = output_b
-        bpy.ops.render.render(write_still=True)
-
-        # 恢复两个对象的可见性
-        set_objects_visibility(imported_a, False)
-        set_objects_visibility(imported_b, False)
-
-        psnr_value = compute_psnr(output_a, output_b)
-        psnr_line = f"{frame:03d},{psnr_value:.4f}"
-        psnr_report_lines.append(psnr_line)
-
-
-
-
-    # 将 PSNR 结果写入输出目录内的文本文件
-    report_path = os.path.join(output_dir, "psnr_results.txt")
-    with open(report_path, "w", encoding="utf-8") as report_file:
-        report_file.write("frame,psnr_db\n")
-        report_file.write("\n".join(psnr_report_lines))
+    psnr_value = compute_psnr(output_a, output_b)
+    folder_name = os.path.basename(os.path.normpath(os.path.dirname(args.obj_a))) or "root"
+    print(f"{folder_name}_psnr : {psnr_value:.4f} dB")
 
 
 if __name__ == "__main__":

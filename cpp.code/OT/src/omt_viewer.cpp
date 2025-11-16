@@ -353,7 +353,24 @@ void key_process( unsigned char key )
 	  mesh._power_cell_center();
 	  break;
   case 'W':
-	{	  
+	{
+	  //double eplision = (1.0 / 512);
+	  //COMTVertex* pV = mesh.idVertex(-1);
+	  //for (COMTMesh::VertexVertexIterator vvit(pV); !vvit.end(); ++vvit)
+	  //{
+		 // COMTMesh::CVertex* pW = *vvit;
+		 // for (int i = 0; i < 2; i++)
+		 // {
+			//  if (std::abs(pW->point()[i] - 0.5) < eplision)
+			//  {
+			//	  pW->uv()[i] = 0.5;
+			//  }
+			//  else if (std::abs(pW->point()[i] + 0.5) < eplision)
+			//  {
+			//	  pW->uv()[i] = -0.5;
+			//  }
+		 // }
+	  //}
 	  for (COMTMesh::MeshVertexIterator vit(&mesh); !vit.end(); ++vit)
 	  {
 		  COMTMesh::CVertex* pV = *vit;

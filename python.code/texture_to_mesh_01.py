@@ -9,6 +9,7 @@
 
 from PIL import Image
 import numpy as np
+import math
 
 
 def parse_obj_faces(obj_path):
@@ -385,12 +386,14 @@ def texture_to_mesh(obj_path, texture_path, output_obj, pixel=None):
     ) = load_textured_pixels(obj_path, texture_path, pixel)
     
     if textured_pixels_low is None:
-        return
+        return None
     
-    textured_count = np.sum(textured_pixels_low)
-    if textured_count == 0:
+    coarse_textured_count = int(np.sum(textured_pixels_low))
+    if coarse_textured_count == 0:
         print("警告：纹理图像中没有被 OBJ 面覆盖的像素！")
     
+    textured_count = int(np.sum(textured_pixels_high))
+
     triangle_hits, triangle_totals = compute_triangle_pixel_stats(
         textured_pixels_high,
         width,
@@ -401,14 +404,24 @@ def texture_to_mesh(obj_path, texture_path, output_obj, pixel=None):
     vertices, faces = build_mesh_from_pixels(triangle_hits, triangle_totals, width, height)
     
     print(f"  顶点数：{len(vertices)}, 面数：{len(faces)}")
-    
+
+    if textured_count > 0:
+        sqrt_value = math.sqrt(textured_count)
+        suggested_pixel = int(math.ceil(sqrt_value / 10.0) * 10)
+    else:
+        suggested_pixel = 10
+    if suggested_pixel <= 0:
+        suggested_pixel = 10
+
     if len(faces) == 0:
         print("警告：生成的面数为 0")
-        return
+        return textured_count, suggested_pixel
     
     print(f"保存到：{output_obj}")
     save_m(output_obj, vertices, faces, width, height)
     print(f"完成！")
+
+    return textured_count, suggested_pixel
 
 
 if __name__ == "__main__":
@@ -428,4 +441,10 @@ if __name__ == "__main__":
     output_obj = sys.argv[3] if len(sys.argv) > 3 else obj_path.replace('.obj', '_texture_mesh.obj')
     pixel = int(sys.argv[4]) if len(sys.argv) > 4 else None
     
-    texture_to_mesh(obj_path, texture_path, output_obj, pixel)
+    result = texture_to_mesh(obj_path, texture_path, output_obj, pixel)
+    if result is None:
+        sys.exit(1)
+
+    textured_count, suggested_pixel = result
+    print(f"TEXTURED_PIXEL_COUNT={textured_count}")
+    print(f"OUTPUT_PIXEL={suggested_pixel}")
