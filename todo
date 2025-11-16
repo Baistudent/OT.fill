@@ -1,5 +1,5 @@
 1. 安装miniconda, 创建虚拟环境{youCondaEnv}(自己命名), 并安装依赖包
-    conda create -n {youCondaEnv} python=3.8
+    conda create -n {youCondaEnv} python=3.12
     conda activate {youCondaEnv}
     conda install pillow numpy
 
